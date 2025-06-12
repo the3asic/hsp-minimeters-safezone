@@ -1,0 +1,14 @@
+# Claude Code 相关文件
+CLAUDE.md
+.claude/
+
+# macOS 系统文件
+.DS_Store
+
+# 备份文件
+*.backup
+*~
+
+# 临时文件
+*.tmp
+*.log

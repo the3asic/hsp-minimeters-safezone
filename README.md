@@ -1,141 +1,184 @@
 # Hammerspoon 窗口边界监控器
 
-这是一个 Hammerspoon 脚本，用于自动防止窗口重叠 macOS 屏幕底部的 32 像素区域。该脚本提供稳定的定时监控、智能排除、多显示器支持等功能。
+专为单显示器环境下与 MiniMeters 状态栏应用协同工作的 Hammerspoon 脚本。优雅地为 MiniMeters 让出屏幕底部 32 像素空间，确保即使窗口最大化或左右分屏时，也不会重叠状态栏。
+
+## 项目文件
+
+```
+hammerspoon/
+├── window_boundary_monitor.lua    # 核心监控模块
+├── init.lua                       # Hammerspoon 初始化配置
+├── install.sh                     # 自动安装脚本
+├── MiniMeters-config.json         # MiniMeters 推荐配置参考
+├── test.lua                       # 功能测试脚本
+├── README.md                      # 项目说明（本文件）
+└── CLAUDE.md                      # 技术架构文档
+```
+
+## 解决问题
+
+- ✅ **窗口最大化时不遮挡 MiniMeters**
+- ✅ **左右分屏时自动避开底部状态栏**
+- ✅ **拖拽窗口到底部时自动调整高度**
+- ✅ **极简设计，专注单一功能**
 
 ## 功能特点
 
-- **定时监控**: 每2秒检查一次所有窗口，确保稳定性和兼容性
-- **智能调整**: 自动调整违规窗口的高度，避免重叠底部区域
-- **多显示器支持**: 完整支持多显示器设置，每个显示器独立处理
-- **智能排除**: 排除系统应用、小窗口和特殊类型窗口
-- **性能优化**: 轻量级定时检查，资源占用极低
-- **可配置**: 支持自定义边界高度、排除应用列表等
-- **实时调整**: 支持快捷键动态调整边界高度
+- **极简设计**: 启动即工作，退出即停止，无复杂操作
+- **定时监控**: 每2秒轻量级检查，稳定可靠
+- **智能调整**: 自动缩减窗口高度，避免重叠 MiniMeters
+- **最少排除**: 仅排除 Hammerspoon 和 MiniMeters 自身
 
-## 安装和使用
+## 安装
 
-### 1. 安装 Hammerspoon
+### 自动安装（推荐）
 
-如果还没有安装 Hammerspoon：
+使用提供的安装脚本，自动处理备份、检测和配置：
 
 ```bash
+./install.sh
+```
+
+安装脚本会：
+- ✅ 检测现有配置并创建备份
+- ✅ 安全部署新配置文件  
+- ✅ 检查 Hammerspoon 和 MiniMeters 状态
+- ✅ 自动重新加载配置
+
+### 手动安装
+
+```bash
+# 1. 安装 Hammerspoon (如果未安装)
+# 方法一（推荐）：使用 Homebrew
 brew install --cask hammerspoon
-```
 
-### 2. 部署脚本
+# 方法二：官网下载
+# 前往 https://www.hammerspoon.org/ 下载 .dmg 安装包
+# 拖拽到 Applications 文件夹完成安装
 
-将这些文件复制到你的 Hammerspoon 配置目录：
-
-```bash
-# 创建 Hammerspoon 配置目录（如果不存在）
+# 2. 部署配置文件
 mkdir -p ~/.hammerspoon
-
-# 复制脚本文件
-cp init.lua ~/.hammerspoon/
 cp window_boundary_monitor.lua ~/.hammerspoon/
+cp init.lua ~/.hammerspoon/
+
+# 3. 启动 Hammerspoon
+open -a "Hammerspoon"
 ```
 
-### 3. 重载配置
+### 权限设置
 
-打开 Hammerspoon 并重载配置，或使用快捷键 `Cmd+Alt+Ctrl+R` (如果 Hammerspoon 已运行)。
+首次启动时需要授予 Hammerspoon 辅助功能权限：
+**系统偏好设置 > 安全性与隐私 > 辅助功能** 中添加 Hammerspoon
 
-## 快捷键
+## 使用
 
-- `Cmd+Alt+Ctrl+W`: 显示监控状态
-- `Cmd+Alt+Ctrl+R`: 手动检查所有窗口
-- `Cmd+Alt+Ctrl+S`: 停止监控
-- `Cmd+Alt+Ctrl+A`: 启动监控
-- `Cmd+Alt+Ctrl+=`: 增加边界高度 (+8像素)
-- `Cmd+Alt+Ctrl+-`: 减少边界高度 (-8像素)
+### 基本操作
 
-## 编程接口
+- **启动监控**: 启动 Hammerspoon 应用即自动开始监控
+- **停止监控**: 退出 Hammerspoon 应用即停止监控
 
-脚本暴露了 `wbm` 全局变量，你可以在 Hammerspoon 控制台中使用：
+## MiniMeters 配置
 
-```lua
--- 显示状态
-wbm.showStatus()
+### 1. 配置 MiniMeters 窗口位置
 
--- 设置边界高度为 50 像素
-wbm.setBoundaryHeight(50)
+编辑 MiniMeters 配置文件 `~/Library/Preferences/MiniMeters/settings.json`，将 `window` 部分设置为：
 
--- 添加排除应用
-wbm.addExcludedApp("Visual Studio Code")
-
--- 移除排除应用
-wbm.removeExcludedApp("Finder")
-
--- 手动检查所有窗口
-wbm.checkAllWindows()
-
--- 停止/启动监控
-wbm.stop()
-wbm.start()
-```
-
-## 配置选项
-
-### 默认排除的应用
-
-```lua
+```json
 {
-    "System Preferences",
-    "Finder", 
-    "Activity Monitor",
-    "Console",
-    "Hammerspoon",
-    "System Information",
-    "Keychain Access"
+  "window": {
+    "always_on_top": true,
+    "collapse_main_menu": false,
+    "custom_position": {
+      "anchor": "BottomLeft",
+      "h": 32,
+      "w": "stick",
+      "x": "stick",
+      "y": -32
+    }
+  }
 }
 ```
 
-### 边界高度
+### 2. 重启 MiniMeters
 
-默认为 32 像素，可以通过 `setBoundaryHeight()` 函数修改（范围：1-200 像素）。
+修改配置后重启 MiniMeters 使设置生效。
 
-### 自动排除规则
+### 3. **重要：手动激活底部栏模式**
 
-脚本会自动排除以下类型的窗口：
-- 不可见或非标准窗口
-- 宽度小于 200 像素或高度小于 100 像素的窗口
-- 标题包含 "Palette"、"Inspector"、"Console"、"Debugger" 等的窗口
+⚠️ **配置文件修改后，MiniMeters 不会自动定位到底部**，需要手动激活：
 
-## 技术实现
+1. 启动 MiniMeters 后，**点击菜单栏中的 "Default Position" 按钮**
+2. MiniMeters 会立即移动到屏幕底部 32px 区域
+3. 此时窗口边界监控器开始生效
 
-### 核心架构
+### 4. 多显示器环境注意事项
 
-- **定时检查**: 使用 `hs.timer.doEvery` 每2秒检查一次所有窗口
-- **屏幕监控**: 使用 `hs.screen.watcher` 监听显示器配置变更
-- **智能缓存**: 缓存屏幕边界信息，支持动态显示器配置
-- **资源管理**: 正确的对象生命周期管理，防止内存泄漏
+如果使用多显示器或经常切换显示器：
+- **每次切换显示器后，需要重新点击 "Default Position"**
+- **断开/连接外接显示器后，需要重新点击 "Default Position"**
+- 建议将此操作作为切换显示器后的常规步骤
 
-### 坐标系统
+### 5. 验证效果
 
-macOS 使用统一坐标网格，主显示器左上角为 (0,0)。脚本正确处理多显示器的复杂坐标变换。
+- MiniMeters 应显示在屏幕底部32像素区域
+- 打开任意应用并最大化或拖拽到底部，观察窗口自动调整避开 MiniMeters
 
-### 性能优化
+---
 
-- 使用哈希表进行 O(1) 应用排除检查
-- 定时检查机制避免事件订阅的复杂性和兼容性问题
-- 智能过滤避免处理无关窗口
-- 仅在发现违规窗口时才输出日志信息
+## 高级配置
+
+### 边界高度调整
+
+默认为 32 像素，修改方法：
+1. 编辑 `window_boundary_monitor.lua` 文件
+2. 修改 `BOUNDARY_HEIGHT = 32` 中的数值
+3. 重新加载 Hammerspoon 配置
+
+### 排除应用管理
+
+默认仅排除：
+- `Hammerspoon` - Hammerspoon 自身
+- `MiniMeters` - MiniMeters 状态栏
+
+所有其他应用窗口都会被监控和调整。
+
+## 调试工具
+
+如需调试，可在 Hammerspoon 控制台中使用：
+
+```lua
+-- 查看监控状态
+wbm.showStatus()
+
+-- 手动检查所有窗口
+wbm.checkAllWindows()
+```
 
 ## 故障排除
 
 ### 常见问题
 
-1. **脚本不工作**: 确保 Hammerspoon 有辅助功能权限
-2. **某些窗口不被处理**: 检查应用是否在排除列表中
-3. **性能问题**: 调整防抖延迟或添加更多排除规则
+**脚本不工作**
+- 确保 Hammerspoon 有辅助功能权限
+- 检查 Hammerspoon 控制台是否有错误信息
 
-### 调试
+**某些窗口不被处理**  
+- 仅 Hammerspoon 和 MiniMeters 被排除，其他应用都会被处理
+- 在控制台运行 `wbm.showStatus()` 查看当前状态
 
-启用调试输出查看脚本运行状态：
+**MiniMeters 位置不正确**
+- 检查 MiniMeters 配置文件语法
+- 确认 `y: -32` 是负值
+- 重启 MiniMeters 应用
 
-```lua
--- 在 Hammerspoon 控制台中查看日志
-print("当前监控状态:")
-wbm.showStatus()
+**恢复备份配置**
+如果需要恢复之前的配置：
+```bash
+# 查看备份目录（安装脚本会显示）
+ls -la ~/.hammerspoon_backup_*
+
+# 恢复备份（替换时间戳）
+cp -r ~/.hammerspoon_backup_YYYYMMDD_HHMMSS/* ~/.hammerspoon/
 ```
 
 ## 许可和贡献

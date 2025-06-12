@@ -1,0 +1,13 @@
+{
+  "window": {
+    "always_on_top": true,
+    "collapse_main_menu": false,
+    "custom_position": {
+      "anchor": "BottomLeft",
+      "h": 32,
+      "w": "stick",
+      "x": "stick",
+      "y": -32
+    }
+  }
+}

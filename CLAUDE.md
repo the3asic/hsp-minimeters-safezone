@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Hammerspoon configuration project focused on **window boundary monitoring** - automatically preventing windows from overlapping the bottom 32 pixels of macOS screens. The project replaces a previous yabai/skhd setup while maintaining essential functionality.
+This is a Hammerspoon configuration project focused on **window boundary monitoring** for single-display setups - automatically preventing windows from overlapping the bottom 32 pixels of macOS screens to create space for MiniMeters status bar. The project replaces a previous yabai/skhd setup while maintaining essential functionality.
 
 ## Core Architecture
 
@@ -72,17 +72,18 @@ wbm.removeExcludedApp("App Name")  -- Remove from exclusion list
 - Resource cleanup on config reload
 - Minimal logging (only when violations are found and fixed)
 
-### Multi-Monitor Handling
-- Per-screen boundary calculation respecting macOS coordinate system
-- Screen change detection with automatic boundary recalculation
-- Support for complex monitor arrangements (negative coordinates)
+### Single-Display Focus
+- Optimized for single-display setups with MiniMeters integration
+- Primary screen boundary calculation and monitoring
+- Simplified architecture for reliability and performance
 
 ## Integration Notes
 
 ### Compatibility with Status Bar Apps
-- **Minimeters compatibility**: 32px bottom boundary protects status indicators
+- **MiniMeters integration**: Perfect coordination with 32px bottom boundary
 - **External bar simulation**: Hammerspoon enabled = external bar active
 - **Toggle workflow**: Start/stop Hammerspoon to enable/disable protection
+- **Configuration sync**: MiniMeters positioned at y:-32 with h:32 for seamless integration
 
 ### Exclusion Strategy
 Automatically excludes:

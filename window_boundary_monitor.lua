@@ -1,17 +1,18 @@
--- Window Boundary Monitor
--- 防止窗口重叠屏幕底部 32 像素区域
--- 简化版本，解决事件订阅问题
+-- Window Boundary Monitor  
+-- 专为单显示器环境下与 MiniMeters 协同工作的窗口边界监控器
+-- 优雅地为 MiniMeters 让出屏幕底部 32 像素空间
 
 local WindowBoundaryMonitor = {}
+
+-- 边界高度设置 (像素)
+-- 要修改边界高度，请更改下面的数值，然后重新加载 Hammerspoon 配置
+-- 推荐值: 32 (适配 MiniMeters 默认高度)
 WindowBoundaryMonitor.BOUNDARY_HEIGHT = 32
+
+-- 排除应用列表 - 仅排除必要的应用
 WindowBoundaryMonitor.excludedApps = {
-    "System Preferences",
-    "Finder",
-    "Activity Monitor", 
-    "Console",
-    "Hammerspoon",
-    "System Information",
-    "Keychain Access"
+    "Hammerspoon",    -- Hammerspoon 自身
+    "MiniMeters"      -- MiniMeters 状态栏
 }
 
 -- 将排除列表转换为哈希表以实现 O(1) 查找
@@ -224,18 +225,19 @@ function WindowBoundaryMonitor.setBoundaryHeight(height)
 end
 
 function WindowBoundaryMonitor.showStatus()
+    local screenFrame = hs.screen.primaryScreen():frame()
     local status = string.format([[
 窗口边界监控状态:
-- 边界高度: %d 像素
+- 边界高度: %d 像素  
 - 监控模式: 定时检查 (每2秒)
-- 监控的显示器数量: %d
+- 屏幕尺寸: %dx%d
+- 保护区域: 底部 %d 像素 (为 MiniMeters 预留)
 - 排除的应用数量: %d
-- 排除的应用: %s
 ]], 
         WindowBoundaryMonitor.BOUNDARY_HEIGHT,
-        #hs.screen.allScreens(),
-        #WindowBoundaryMonitor.excludedApps,
-        table.concat(WindowBoundaryMonitor.excludedApps, ", ")
+        screenFrame.w, screenFrame.h,
+        WindowBoundaryMonitor.BOUNDARY_HEIGHT,
+        #WindowBoundaryMonitor.excludedApps
     )
     print(status)
     return status
