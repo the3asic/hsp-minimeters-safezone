@@ -78,21 +78,37 @@ local function isWindowFullscreen(window)
         end
     end
     
-    -- 全屏检测：检查窗口是否完全覆盖屏幕
-    local tolerance = WindowBoundaryMonitor.config.FULLSCREEN_TOLERANCE
-    
-    -- 检查是否完全匹配 fullFrame（真全屏的几何特征）
-    local exactMatch = math.abs(windowFrame.x - fullFrame.x) <= tolerance and
-                      math.abs(windowFrame.y - fullFrame.y) <= tolerance and
-                      math.abs(windowFrame.w - fullFrame.w) <= tolerance and
-                      math.abs(windowFrame.h - fullFrame.h) <= tolerance
-    
-    -- 如果几何完全匹配，就认为是全屏（除了黑名单应用）
-    if exactMatch then
-        print(string.format("跳过真全屏窗口: %s", appName))
+    ------------------------------------------------------------------
+    -- 全屏检测：使用像素容差 + 百分比容差，兼容 HiDPI/缩放/刘海屏
+    ------------------------------------------------------------------
+    local pixTol = WindowBoundaryMonitor.config.FULLSCREEN_TOLERANCE or 2
+    local pctTol = 0.01 -- 1% 额外比例容差
+
+    -- 辅助函数：比较两个值是否在容差范围
+    local function withinTol(a, b, dim)
+        local diff = math.abs(a - b)
+        return diff <= pixTol or diff <= dim * pctTol
+    end
+
+    -- 获取最新 fullFrame（菜单栏显隐时会变化）
+    local dynamicFullFrame = screen:fullFrame()
+
+    -- 是否几何覆盖（匹配 cached fullFrame 或 dynamic fullFrame 其一即可）
+    local function frameMatches(targetFrame)
+        return withinTol(windowFrame.x, targetFrame.x, targetFrame.w) and
+               withinTol(windowFrame.y, targetFrame.y, targetFrame.h) and
+               withinTol(windowFrame.w, targetFrame.w, targetFrame.w) and
+               withinTol(windowFrame.h, targetFrame.h, targetFrame.h)
+    end
+
+    local matchesCachedFull  = frameMatches(fullFrame)
+    local matchesDynamicFull = frameMatches(dynamicFullFrame)
+
+    if matchesCachedFull or matchesDynamicFull then
+        -- 视为全屏
         return true
     end
-    
+
     return false
 end
 
