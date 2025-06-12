@@ -13,7 +13,7 @@ echo "🔨 Hammerspoon 窗口边界监控器安装程序"
 echo "=================================="
 
 # 检查 Hammerspoon 是否已安装
-if ! command -v hammerspoon &> /dev/null && [ ! -d "/Applications/Hammerspoon.app" ]; then
+if ! command -v hs &> /dev/null && [ ! -d "/Applications/Hammerspoon.app" ]; then
     echo "❌ 未检测到 Hammerspoon，请先安装"
     echo ""
     echo "📥 安装方法："
