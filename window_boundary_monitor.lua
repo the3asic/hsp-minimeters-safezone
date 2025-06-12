@@ -42,7 +42,10 @@ local screenBoundaries = {}
 local windowStates = {}
 
 -- 定时器用于周期检查
-local checkTimer = nil
+local checkTimer = nil -- 兼容旧接口：若需要回退到定时器，可复用
+
+-- 事件驱动所用的窗口过滤器
+local windowFilter = nil
 
 -- 检测窗口是否为真全屏状态（使用缓存的屏幕信息）
 local function isWindowFullscreen(window)
@@ -349,16 +352,48 @@ function WindowBoundaryMonitor.start()
     -- 开始监控
     screenWatcher:start()
     
-    -- 启动定时检查（每2秒检查一次）
+    -- 若之前有残余定时器则停止
     if checkTimer then
         checkTimer:stop()
+        checkTimer = nil
     end
-    checkTimer = hs.timer.doEvery(WindowBoundaryMonitor.config.TIMER_INTERVAL, checkAllWindows)
-    
-    -- 检查现有窗口
+
+    ------------------------------------------------------------------
+    -- 事件驱动窗口监控
+    ------------------------------------------------------------------
+    if windowFilter then
+        windowFilter:unsubscribeAll()
+        windowFilter = nil
+    end
+
+    local wf = hs.window.filter
+    -- new(true) 创建空过滤器，允许所有窗口
+    windowFilter = wf.new(true)
+
+    local subscribedEvents = {
+        wf.windowCreated,
+        wf.windowMoved,
+        wf.windowResized,
+        wf.windowUnfullscreened,
+        wf.windowUnminimized,
+    }
+
+    windowFilter:subscribe(subscribedEvents, function(win, appName, event)
+        -- 在事件回调中，逐窗检查即可，减少全量遍历
+        if not win or not win:isVisible() then return end
+
+        -- 维护全屏缓存与状态
+        updateWindowState(win)
+
+        if isWindowViolatingBoundary(win) then
+            fixWindowBounds(win)
+        end
+    end)
+
+    -- 首次启动时仍检查一次全部窗口
     checkAllWindows()
-    
-    print("窗口边界监控已启动（定时检查模式）")
+
+    print("窗口边界监控已启动（事件驱动模式）")
     hs.alert.show("窗口边界监控已启动", 2)
 end
 
@@ -371,6 +406,11 @@ function WindowBoundaryMonitor.stop()
     if checkTimer then
         checkTimer:stop()
         checkTimer = nil
+    end
+
+    if windowFilter then
+        windowFilter:unsubscribeAll()
+        windowFilter = nil
     end
     
     print("窗口边界监控已停止")
