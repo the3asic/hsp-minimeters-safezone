@@ -228,42 +228,69 @@ end
 
 -- 通过调整高度修复窗口边界违规
 local function fixWindowBounds(window)
-    local windowFrame = window:frame()
+    local frame = window:frame()
     local screen = window:screen()
     if not screen then return end
-    
+
     local bounds = screenBoundaries[screen:id()]
     if not bounds then return end
-    
-    -- 计算符合边界要求的新高度
-    local maxAllowedBottom = bounds.bottomLimit
-    local newHeight = maxAllowedBottom - windowFrame.y
-    
-    -- 最小窗口高度
+
+    local screenFrame   = bounds.screenFrame  -- 可用区域（不含菜单栏/Dock）
+    local maxBottom     = bounds.bottomLimit  -- 预留 MiniMeters 后的底部
+    local minTop        = screenFrame.y       -- 顶部可见起始
+
     local MIN_HEIGHT = WindowBoundaryMonitor.config.MIN_HEIGHT
 
-    -- 若窗口顶端已低于/超过底部限制，newHeight 为负，需要整体上移
-    if newHeight <= 0 then
-        windowFrame.y = maxAllowedBottom - MIN_HEIGHT
-        newHeight = MIN_HEIGHT
-    elseif newHeight < MIN_HEIGHT then
-        newHeight = MIN_HEIGHT
-    end
-    
-    -- 应用新尺寸
+    -- 调整 Y / 高度，确保顶部与底部都在可见范围
     local newFrame = {
-        x = windowFrame.x,
-        y = windowFrame.y,
-        w = windowFrame.w,
-        h = newHeight
+        x = frame.x,
+        y = frame.y,
+        w = frame.w,
+        h = frame.h,
     }
-    
-    -- 设置带简短动画的新框架
-    window:setFrame(newFrame, 0.2)
-    
-    -- 显示简短通知
-    local appName = window:application():name()
-    print(string.format("已调整 %s 窗口尺寸以符合边界要求", appName))
+
+    ------------------------------------------------------------------
+    -- 1. 修正顶部越界：若窗口顶部在屏幕之上，则先把窗口下移
+    ------------------------------------------------------------------
+    if newFrame.y < minTop then
+        newFrame.y = minTop
+    end
+
+    ------------------------------------------------------------------
+    -- 2. 修正底部越界：若底部超出 bottomLimit，则优先缩短高度，
+    --    若缩到 MIN_HEIGHT 仍越界，则整体上移。
+    ------------------------------------------------------------------
+    local bottom = newFrame.y + newFrame.h
+
+    if bottom > maxBottom then
+        local overflow = bottom - maxBottom
+        -- 2.1 能否通过减少高度解决？
+        if newFrame.h - overflow >= MIN_HEIGHT then
+            newFrame.h = newFrame.h - overflow
+        else
+            -- 2.2 最小高度仍然越界：设置最小高度并上移窗口
+            newFrame.h = MIN_HEIGHT
+            newFrame.y = maxBottom - MIN_HEIGHT
+            -- 再次防止顶端越界
+            if newFrame.y < minTop then
+                newFrame.y = minTop
+            end
+        end
+    end
+
+    ------------------------------------------------------------------
+    -- 3. 最终防御：若高度被压缩到 0 或负，放弃调整
+    ------------------------------------------------------------------
+    if newFrame.h <= 0 then
+        print("⚠️ 无法调整窗口，目标高度 <= 0，已跳过")
+        return
+    end
+
+    -- 应用修改（无动画以减少闪烁）
+    window:setFrame(newFrame, 0)
+
+    local appName = window:application() and window:application():name() or "未知应用"
+    print(string.format("已调整 %s 窗口位置/尺寸以符合边界要求", appName))
 end
 
 -- 检查所有可见窗口
