@@ -28,8 +28,91 @@ end
 -- 存储所有显示器的边界信息
 local screenBoundaries = {}
 
+-- 记录窗口状态，防止全屏时的死循环
+local windowStates = {}
+
 -- 定时器用于周期检查
 local checkTimer = nil
+
+-- 检测窗口是否为真全屏状态（黑名单模式 + 精确几何检测）
+local function isWindowFullscreen(window)
+    if not window then return false end
+    
+    local app = window:application()
+    if not app then return false end
+    
+    local appName = app:name()
+    local windowFrame = window:frame()
+    local screen = window:screen()
+    if not screen then return false end
+    
+    local fullFrame = screen:fullFrame()  -- 完整屏幕(包含菜单栏/notch区域)
+    local normalFrame = screen:frame()    -- 可用屏幕(菜单栏/notch下方)
+    
+    -- 黑名单：这些应用永远不会有真全屏（即使几何匹配）
+    local neverFullscreenApps = {
+        "Finder"       -- Finder 的"全屏覆盖"是特殊行为，不是真全屏
+    }
+    
+    for _, excludeApp in ipairs(neverFullscreenApps) do
+        if appName == excludeApp then
+            return false
+        end
+    end
+    
+    -- 全屏检测：检查窗口是否完全覆盖屏幕
+    local tolerance = 2
+    
+    -- 检查是否完全匹配 fullFrame（真全屏的几何特征）
+    local exactMatch = math.abs(windowFrame.x - fullFrame.x) <= tolerance and
+                      math.abs(windowFrame.y - fullFrame.y) <= tolerance and
+                      math.abs(windowFrame.w - fullFrame.w) <= tolerance and
+                      math.abs(windowFrame.h - fullFrame.h) <= tolerance
+    
+    -- 如果几何完全匹配，就认为是全屏（除了黑名单应用）
+    if exactMatch then
+        print(string.format("跳过真全屏窗口: %s", appName))
+        return true
+    end
+    
+    return false
+end
+
+-- 获取窗口唯一标识
+local function getWindowId(window)
+    if not window then return nil end
+    local app = window:application()
+    if not app then return nil end
+    return app:name() .. ":" .. (window:title() or "untitled")
+end
+
+-- 更新窗口状态并检测变化
+local function updateWindowState(window)
+    local windowId = getWindowId(window)
+    if not windowId then return false end
+    
+    local isFullscreen = isWindowFullscreen(window)
+    local oldState = windowStates[windowId]
+    
+    windowStates[windowId] = {
+        isFullscreen = isFullscreen,
+        lastCheck = os.time()
+    }
+    
+    -- 返回是否从全屏变为非全屏（需要重新检查）
+    return oldState and oldState.isFullscreen and not isFullscreen
+end
+
+-- 清理过期的窗口状态记录
+local function cleanupWindowStates()
+    local currentTime = os.time()
+    for windowId, state in pairs(windowStates) do
+        -- 清理超过5分钟的记录
+        if currentTime - state.lastCheck > 300 then
+            windowStates[windowId] = nil
+        end
+    end
+end
 
 -- 初始化屏幕边界缓存
 local function updateScreenBoundaries()
@@ -70,6 +153,12 @@ local function shouldExcludeWindow(window)
     }
     for _, pattern in ipairs(floatingTitles) do
         if windowTitle:match(pattern) then return true end
+    end
+    
+    -- 全屏窗口排除（防止死循环）
+    if isWindowFullscreen(window) then
+        print(string.format("跳过真全屏窗口: %s", appName))
+        return true
     end
     
     -- 基于尺寸的排除（微小的工具窗口）
@@ -141,15 +230,35 @@ end
 
 -- 检查所有可见窗口
 local function checkAllWindows()
+    -- 定期清理窗口状态缓存
+    cleanupWindowStates()
+    
     local processedCount = 0
+    local fullscreenExitCount = 0
+    
     for _, window in pairs(hs.window.visibleWindows()) do
+        -- 更新窗口状态并检测是否从全屏退出
+        local justExitedFullscreen = updateWindowState(window)
+        
+        if justExitedFullscreen then
+            fullscreenExitCount = fullscreenExitCount + 1
+            local appName = window:application() and window:application():name() or "未知应用"
+            print(string.format("检测到 %s 退出全屏，重新检查边界", appName))
+        end
+        
+        -- 检查边界违规并处理
         if isWindowViolatingBoundary(window) then
             fixWindowBounds(window)
             processedCount = processedCount + 1
         end
     end
+    
     if processedCount > 0 then
         print(string.format("处理了 %d 个违规窗口", processedCount))
+    end
+    
+    if fullscreenExitCount > 0 then
+        print(string.format("检测到 %d 个窗口退出全屏状态", fullscreenExitCount))
     end
 end
 
