@@ -79,7 +79,7 @@ fi
 if pgrep -x "Hammerspoon" > /dev/null; then
     echo ""
     echo "🔄 检测到 Hammerspoon 正在运行，将重新加载配置..."
-    osascript -e 'tell application "Hammerspoon" to reload config'
+    osascript -e 'tell application "System Events" to tell process "Hammerspoon" to click menu item "Reload Config" of menu "Hammerspoon" of menu bar 1' 2>/dev/null || echo "   请手动在 Hammerspoon 菜单中选择 'Reload Config'"
     sleep 2
 else
     echo ""
