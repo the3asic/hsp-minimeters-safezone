@@ -91,21 +91,7 @@ cp init.lua ~/.hammerspoon/
 open -a "Hammerspoon"
 ```
 
-### 4. 权限设置
-
-首次启动时需要授予 Hammerspoon 辅助功能权限：
-**系统偏好设置 > 安全性与隐私 > 辅助功能** 中添加 Hammerspoon
-
-## 使用
-
-### 基本操作
-
-- **启动监控**: 启动 Hammerspoon 应用即自动开始监控
-- **停止监控**: 退出 Hammerspoon 应用即停止监控
-
-## MiniMeters 配置
-
-### 1. 配置 MiniMeters 窗口位置
+#### 手动配置 MiniMeters
 
 编辑 MiniMeters 配置文件 `~/Library/Preferences/MiniMeters/settings.json`，将 `window` 部分设置为：
 
@@ -120,31 +106,42 @@ open -a "Hammerspoon"
       "w": "stick",
       "x": "stick",
       "y": -32
-    }
+    },
+    "default_position": "custom"
   }
 }
 ```
 
-### 2. 重启 MiniMeters
+### 4. 权限设置
 
-修改配置后重启 MiniMeters 使设置生效。
+首次启动时需要授予 Hammerspoon 辅助功能权限：
+**系统偏好设置 > 安全性与隐私 > 辅助功能** 中添加 Hammerspoon
 
-### 3. **重要：手动激活底部栏模式**
+## 使用
+
+### 基本操作
+
+- **启动监控**: 启动 Hammerspoon 应用即自动开始监控
+- **停止监控**: 退出 Hammerspoon 应用即停止监控
+
+## MiniMeters 配置
+
+### 1. **重要：手动激活底部栏模式**
 
 ⚠️ **配置文件修改后，MiniMeters 不会自动定位到底部**，需要手动激活：
 
 1. 启动 MiniMeters 后，**点击菜单栏中的 "Default Position" 按钮**
 2. MiniMeters 会立即移动到屏幕底部 32px 区域
-3. 此时窗口边界监控器开始生效
+3. 此时 MiniMeters 位于窗口边界监控器保护的区域内
 
-### 4. 多显示器环境注意事项
+### 2. 多显示器环境注意事项
 
 如果使用多显示器或经常切换显示器：
 - **每次切换显示器后，需要重新点击 "Default Position"**
 - **断开/连接外接显示器后，需要重新点击 "Default Position"**
 - 建议将此操作作为切换显示器后的常规步骤
 
-### 5. 验证效果
+### 3. 验证效果
 
 - MiniMeters 应显示在屏幕底部32像素区域
 - 打开任意应用并最大化或拖拽到底部，观察窗口自动调整避开 MiniMeters
