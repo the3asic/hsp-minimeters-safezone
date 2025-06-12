@@ -34,7 +34,7 @@ local windowStates = {}
 -- 定时器用于周期检查
 local checkTimer = nil
 
--- 检测窗口是否为真全屏状态（黑名单模式 + 精确几何检测）
+-- 检测窗口是否为真全屏状态（使用缓存的屏幕信息）
 local function isWindowFullscreen(window)
     if not window then return false end
     
@@ -46,8 +46,16 @@ local function isWindowFullscreen(window)
     local screen = window:screen()
     if not screen then return false end
     
-    local fullFrame = screen:fullFrame()  -- 完整屏幕(包含菜单栏/notch区域)
-    local normalFrame = screen:frame()    -- 可用屏幕(菜单栏/notch下方)
+    -- 使用缓存的屏幕信息，确保与边界检测一致
+    local screenId = screen:id()
+    local screenInfo = screenBoundaries[screenId]
+    if not screenInfo then 
+        -- 如果缓存中没有信息，可能是屏幕刚变更，直接返回false避免误判
+        return false 
+    end
+    
+    local fullFrame = screenInfo.fullFrame      -- 从缓存获取完整屏幕信息
+    local normalFrame = screenInfo.normalFrame  -- 从缓存获取可用屏幕信息
     
     -- 黑名单：这些应用永远不会有真全屏（即使几何匹配）
     local neverFullscreenApps = {
@@ -114,14 +122,18 @@ local function cleanupWindowStates()
     end
 end
 
--- 初始化屏幕边界缓存
+-- 初始化屏幕边界缓存（包含全屏检测所需信息）
 local function updateScreenBoundaries()
     screenBoundaries = {}
     for _, screen in pairs(hs.screen.allScreens()) do
-        local frame = screen:frame()
+        local normalFrame = screen:frame()      -- 可用屏幕区域
+        local fullFrame = screen:fullFrame()    -- 完整屏幕区域（包含菜单栏/notch）
+        
         screenBoundaries[screen:id()] = {
-            bottomLimit = frame.y + frame.h - WindowBoundaryMonitor.BOUNDARY_HEIGHT,
-            screenFrame = frame,
+            bottomLimit = normalFrame.y + normalFrame.h - WindowBoundaryMonitor.BOUNDARY_HEIGHT,
+            screenFrame = normalFrame,    -- 保持向后兼容
+            fullFrame = fullFrame,        -- 新增：用于全屏检测
+            normalFrame = normalFrame,    -- 新增：明确标识
             name = screen:name(),
             isPrimary = screen == hs.screen.primaryScreen()
         }
@@ -129,7 +141,7 @@ local function updateScreenBoundaries()
     -- 为兼容 Lua 对稀疏数组计数的不确定性，改用手动计数
     local screenCount = 0
     for _ in pairs(screenBoundaries) do screenCount = screenCount + 1 end
-    print("更新屏幕边界缓存，共" .. screenCount .. "个显示器")
+    print("更新屏幕边界缓存（含全屏检测信息），共" .. screenCount .. "个显示器")
 end
 
 -- 智能排除系统 - 检查是否应该排除某个窗口
