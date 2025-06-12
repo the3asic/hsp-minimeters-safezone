@@ -1,6 +1,10 @@
 -- Window Boundary Monitor  
 -- 专为单显示器环境下与 MiniMeters 协同工作的窗口边界监控器
 -- 优雅地为 MiniMeters 让出屏幕底部 32 像素空间
+-- 若在非 Hammerspoon 环境执行，立即终止（提高鲁棒性）
+if type(hs) ~= "table" then
+    error("WindowBoundaryMonitor 必须在 Hammerspoon 环境中运行")
+end
 
 local WindowBoundaryMonitor = {}
 
@@ -39,7 +43,10 @@ local function updateScreenBoundaries()
             isPrimary = screen == hs.screen.primaryScreen()
         }
     end
-    print("更新屏幕边界缓存，共" .. #hs.screen.allScreens() .. "个显示器")
+    -- 为兼容 Lua 对稀疏数组计数的不确定性，改用手动计数
+    local screenCount = 0
+    for _ in pairs(screenBoundaries) do screenCount = screenCount + 1 end
+    print("更新屏幕边界缓存，共" .. screenCount .. "个显示器")
 end
 
 -- 智能排除系统 - 检查是否应该排除某个窗口
@@ -67,7 +74,8 @@ local function shouldExcludeWindow(window)
     
     -- 基于尺寸的排除（微小的工具窗口）
     local frame = window:frame()
-    if frame.w < 200 or frame.h < 100 then return true end
+    -- 同时满足宽窄且矮小才排除，避免误伤纵向侧边栏等窄但高的窗口
+    if frame.w < 200 and frame.h < 100 then return true end
     
     return false
 end
@@ -104,11 +112,14 @@ local function fixWindowBounds(window)
     local maxAllowedBottom = bounds.bottomLimit
     local newHeight = maxAllowedBottom - windowFrame.y
     
-    -- 确保最小窗口高度
+    -- 最小窗口高度
     local MIN_HEIGHT = 100
-    if newHeight < MIN_HEIGHT then
-        -- 如果窗口在屏幕上位置过高，将其向下移动
+
+    -- 若窗口顶端已低于/超过底部限制，newHeight 为负，需要整体上移
+    if newHeight <= 0 then
         windowFrame.y = maxAllowedBottom - MIN_HEIGHT
+        newHeight = MIN_HEIGHT
+    elseif newHeight < MIN_HEIGHT then
         newHeight = MIN_HEIGHT
     end
     
@@ -180,8 +191,8 @@ end
 -- 清理函数
 function WindowBoundaryMonitor.stop()
     if screenWatcher then 
+        -- 仅停止，不置空，避免重启时空引用
         screenWatcher:stop() 
-        screenWatcher = nil
     end
     if checkTimer then
         checkTimer:stop()
