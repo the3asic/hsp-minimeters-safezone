@@ -8,10 +8,20 @@ end
 
 local WindowBoundaryMonitor = {}
 
--- 边界高度设置 (像素)
--- 要修改边界高度，请更改下面的数值，然后重新加载 Hammerspoon 配置
--- 推荐值: 32 (适配 MiniMeters 默认高度)
-WindowBoundaryMonitor.BOUNDARY_HEIGHT = 32
+-- 统一配置表：集中所有可调常量，便于维护
+WindowBoundaryMonitor.config = {
+    -- 为 MiniMeters 预留的底部像素高度
+    BOUNDARY_HEIGHT = 32,
+    -- 定时检查间隔（秒）
+    TIMER_INTERVAL   = 2,
+    -- 全屏检测的像素容差
+    FULLSCREEN_TOLERANCE = 2,
+    -- 调整窗口时允许的最小高度
+    MIN_HEIGHT = 100,
+}
+
+-- 为向后兼容保留旧字段（别名）
+WindowBoundaryMonitor.BOUNDARY_HEIGHT = WindowBoundaryMonitor.config.BOUNDARY_HEIGHT
 
 -- 排除应用列表 - 仅排除必要的应用
 WindowBoundaryMonitor.excludedApps = {
@@ -32,7 +42,10 @@ local screenBoundaries = {}
 local windowStates = {}
 
 -- 定时器用于周期检查
-local checkTimer = nil
+local checkTimer = nil -- 兼容旧接口：若需要回退到定时器，可复用
+
+-- 事件驱动所用的窗口过滤器
+local windowFilter = nil
 
 -- 检测窗口是否为真全屏状态（使用缓存的屏幕信息）
 local function isWindowFullscreen(window)
@@ -68,21 +81,37 @@ local function isWindowFullscreen(window)
         end
     end
     
-    -- 全屏检测：检查窗口是否完全覆盖屏幕
-    local tolerance = 2
-    
-    -- 检查是否完全匹配 fullFrame（真全屏的几何特征）
-    local exactMatch = math.abs(windowFrame.x - fullFrame.x) <= tolerance and
-                      math.abs(windowFrame.y - fullFrame.y) <= tolerance and
-                      math.abs(windowFrame.w - fullFrame.w) <= tolerance and
-                      math.abs(windowFrame.h - fullFrame.h) <= tolerance
-    
-    -- 如果几何完全匹配，就认为是全屏（除了黑名单应用）
-    if exactMatch then
-        print(string.format("跳过真全屏窗口: %s", appName))
+    ------------------------------------------------------------------
+    -- 全屏检测：使用像素容差 + 百分比容差，兼容 HiDPI/缩放/刘海屏
+    ------------------------------------------------------------------
+    local pixTol = WindowBoundaryMonitor.config.FULLSCREEN_TOLERANCE or 2
+    local pctTol = 0.01 -- 1% 额外比例容差
+
+    -- 辅助函数：比较两个值是否在容差范围
+    local function withinTol(a, b, dim)
+        local diff = math.abs(a - b)
+        return diff <= pixTol or diff <= dim * pctTol
+    end
+
+    -- 获取最新 fullFrame（菜单栏显隐时会变化）
+    local dynamicFullFrame = screen:fullFrame()
+
+    -- 是否几何覆盖（匹配 cached fullFrame 或 dynamic fullFrame 其一即可）
+    local function frameMatches(targetFrame)
+        return withinTol(windowFrame.x, targetFrame.x, targetFrame.w) and
+               withinTol(windowFrame.y, targetFrame.y, targetFrame.h) and
+               withinTol(windowFrame.w, targetFrame.w, targetFrame.w) and
+               withinTol(windowFrame.h, targetFrame.h, targetFrame.h)
+    end
+
+    local matchesCachedFull  = frameMatches(fullFrame)
+    local matchesDynamicFull = frameMatches(dynamicFullFrame)
+
+    if matchesCachedFull or matchesDynamicFull then
+        -- 视为全屏
         return true
     end
-    
+
     return false
 end
 
@@ -202,42 +231,69 @@ end
 
 -- 通过调整高度修复窗口边界违规
 local function fixWindowBounds(window)
-    local windowFrame = window:frame()
+    local frame = window:frame()
     local screen = window:screen()
     if not screen then return end
-    
+
     local bounds = screenBoundaries[screen:id()]
     if not bounds then return end
-    
-    -- 计算符合边界要求的新高度
-    local maxAllowedBottom = bounds.bottomLimit
-    local newHeight = maxAllowedBottom - windowFrame.y
-    
-    -- 最小窗口高度
-    local MIN_HEIGHT = 100
 
-    -- 若窗口顶端已低于/超过底部限制，newHeight 为负，需要整体上移
-    if newHeight <= 0 then
-        windowFrame.y = maxAllowedBottom - MIN_HEIGHT
-        newHeight = MIN_HEIGHT
-    elseif newHeight < MIN_HEIGHT then
-        newHeight = MIN_HEIGHT
-    end
-    
-    -- 应用新尺寸
+    local screenFrame   = bounds.screenFrame  -- 可用区域（不含菜单栏/Dock）
+    local maxBottom     = bounds.bottomLimit  -- 预留 MiniMeters 后的底部
+    local minTop        = screenFrame.y       -- 顶部可见起始
+
+    local MIN_HEIGHT = WindowBoundaryMonitor.config.MIN_HEIGHT
+
+    -- 调整 Y / 高度，确保顶部与底部都在可见范围
     local newFrame = {
-        x = windowFrame.x,
-        y = windowFrame.y,
-        w = windowFrame.w,
-        h = newHeight
+        x = frame.x,
+        y = frame.y,
+        w = frame.w,
+        h = frame.h,
     }
-    
-    -- 设置带简短动画的新框架
-    window:setFrame(newFrame, 0.2)
-    
-    -- 显示简短通知
-    local appName = window:application():name()
-    print(string.format("已调整 %s 窗口尺寸以符合边界要求", appName))
+
+    ------------------------------------------------------------------
+    -- 1. 修正顶部越界：若窗口顶部在屏幕之上，则先把窗口下移
+    ------------------------------------------------------------------
+    if newFrame.y < minTop then
+        newFrame.y = minTop
+    end
+
+    ------------------------------------------------------------------
+    -- 2. 修正底部越界：若底部超出 bottomLimit，则优先缩短高度，
+    --    若缩到 MIN_HEIGHT 仍越界，则整体上移。
+    ------------------------------------------------------------------
+    local bottom = newFrame.y + newFrame.h
+
+    if bottom > maxBottom then
+        local overflow = bottom - maxBottom
+        -- 2.1 能否通过减少高度解决？
+        if newFrame.h - overflow >= MIN_HEIGHT then
+            newFrame.h = newFrame.h - overflow
+        else
+            -- 2.2 最小高度仍然越界：设置最小高度并上移窗口
+            newFrame.h = MIN_HEIGHT
+            newFrame.y = maxBottom - MIN_HEIGHT
+            -- 再次防止顶端越界
+            if newFrame.y < minTop then
+                newFrame.y = minTop
+            end
+        end
+    end
+
+    ------------------------------------------------------------------
+    -- 3. 最终防御：若高度被压缩到 0 或负，放弃调整
+    ------------------------------------------------------------------
+    if newFrame.h <= 0 then
+        print("⚠️ 无法调整窗口，目标高度 <= 0，已跳过")
+        return
+    end
+
+    -- 应用修改（无动画以减少闪烁）
+    window:setFrame(newFrame, 0)
+
+    local appName = window:application() and window:application():name() or "未知应用"
+    print(string.format("已调整 %s 窗口位置/尺寸以符合边界要求", appName))
 end
 
 -- 检查所有可见窗口
@@ -296,16 +352,48 @@ function WindowBoundaryMonitor.start()
     -- 开始监控
     screenWatcher:start()
     
-    -- 启动定时检查（每2秒检查一次）
+    -- 若之前有残余定时器则停止
     if checkTimer then
         checkTimer:stop()
+        checkTimer = nil
     end
-    checkTimer = hs.timer.doEvery(2, checkAllWindows)
-    
-    -- 检查现有窗口
+
+    ------------------------------------------------------------------
+    -- 事件驱动窗口监控
+    ------------------------------------------------------------------
+    if windowFilter then
+        windowFilter:unsubscribeAll()
+        windowFilter = nil
+    end
+
+    local wf = hs.window.filter
+    -- new(true) 创建空过滤器，允许所有窗口
+    windowFilter = wf.new(true)
+
+    local subscribedEvents = {
+        wf.windowCreated,
+        wf.windowMoved,
+        wf.windowResized,
+        wf.windowUnfullscreened,
+        wf.windowUnminimized,
+    }
+
+    windowFilter:subscribe(subscribedEvents, function(win, appName, event)
+        -- 在事件回调中，逐窗检查即可，减少全量遍历
+        if not win or not win:isVisible() then return end
+
+        -- 维护全屏缓存与状态
+        updateWindowState(win)
+
+        if isWindowViolatingBoundary(win) then
+            fixWindowBounds(win)
+        end
+    end)
+
+    -- 首次启动时仍检查一次全部窗口
     checkAllWindows()
-    
-    print("窗口边界监控已启动（定时检查模式）")
+
+    print("窗口边界监控已启动（事件驱动模式）")
     hs.alert.show("窗口边界监控已启动", 2)
 end
 
@@ -318,6 +406,11 @@ function WindowBoundaryMonitor.stop()
     if checkTimer then
         checkTimer:stop()
         checkTimer = nil
+    end
+
+    if windowFilter then
+        windowFilter:unsubscribeAll()
+        windowFilter = nil
     end
     
     print("窗口边界监控已停止")
@@ -349,6 +442,7 @@ end
 function WindowBoundaryMonitor.setBoundaryHeight(height)
     if height > 0 and height <= 200 then
         WindowBoundaryMonitor.BOUNDARY_HEIGHT = height
+        WindowBoundaryMonitor.config.BOUNDARY_HEIGHT = height
         updateScreenBoundaries()
         print(string.format("边界高度已设置为 %d 像素", height))
     else
@@ -361,12 +455,13 @@ function WindowBoundaryMonitor.showStatus()
     local status = string.format([[
 窗口边界监控状态:
 - 边界高度: %d 像素  
-- 监控模式: 定时检查 (每2秒)
+- 监控模式: 定时检查 (每%d秒)
 - 屏幕尺寸: %dx%d
 - 保护区域: 底部 %d 像素 (为 MiniMeters 预留)
 - 排除的应用数量: %d
 ]], 
         WindowBoundaryMonitor.BOUNDARY_HEIGHT,
+        WindowBoundaryMonitor.config.TIMER_INTERVAL,
         screenFrame.w, screenFrame.h,
         WindowBoundaryMonitor.BOUNDARY_HEIGHT,
         #WindowBoundaryMonitor.excludedApps
