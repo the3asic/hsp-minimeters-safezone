@@ -29,13 +29,18 @@ echo "✅ 检测到 Hammerspoon"
 # 检查是否存在现有配置
 if [ -d "$HAMMERSPOON_DIR" ]; then
     echo ""
-    echo "⚠️  检测到现有 Hammerspoon 配置"
     
-    if [ -f "$HAMMERSPOON_DIR/init.lua" ]; then
-        echo "📄 现有配置文件预览："
-        echo "---"
-        head -10 "$HAMMERSPOON_DIR/init.lua" 2>/dev/null || echo "无法读取现有配置"
-        echo "---"
+    # 检查是否是我们的配置
+    if [ -f "$HAMMERSPOON_DIR/window_boundary_monitor.lua" ] && grep -q "WindowBoundaryMonitor" "$HAMMERSPOON_DIR/init.lua" 2>/dev/null; then
+        echo "🔄 检测到现有的窗口边界监控配置，将更新到最新版本"
+    else
+        echo "⚠️  检测到其他 Hammerspoon 配置"
+        if [ -f "$HAMMERSPOON_DIR/init.lua" ]; then
+            echo "📄 现有配置文件预览："
+            echo "---"
+            head -10 "$HAMMERSPOON_DIR/init.lua" 2>/dev/null || echo "无法读取现有配置"
+            echo "---"
+        fi
     fi
     
     echo ""
@@ -66,13 +71,13 @@ cp "$SCRIPT_DIR/init.lua" "$HAMMERSPOON_DIR/"
 
 echo "✅ 配置文件安装完成"
 
-# 检查 MiniMeters 进程
+# 简单检查
 echo ""
-echo "🔍 检查 MiniMeters 状态..."
+echo "🔍 基础检查..."
 if pgrep -x "MiniMeters" > /dev/null; then
-    echo "✅ 检测到 MiniMeters 正在运行"
+    echo "✅ MiniMeters 正在运行"
 else
-    echo "⚠️  未检测到 MiniMeters 进程，请确保 MiniMeters 已启动"
+    echo "⚠️  MiniMeters 未运行，请启动 MiniMeters"
 fi
 
 # 检查 Hammerspoon 是否正在运行
@@ -92,9 +97,9 @@ echo ""
 echo "🎉 安装完成！"
 echo ""
 echo "📋 接下来的步骤："
-echo "1. 确保 Hammerspoon 有辅助功能权限（系统偏好设置 > 安全性与隐私 > 辅助功能）"
-echo "2. 配置 MiniMeters 窗口位置（参考 README.md 中的配置）"
-echo "3. 测试窗口边界保护功能"
+echo "1. 确保 Hammerspoon 有辅助功能权限"
+echo "2. 在 Hammerspoon 偏好设置中启用自动启动"
+echo "3. 配置 MiniMeters 窗口位置为底部 32px"
 echo ""
 
 if [ -d "$BACKUP_DIR" ]; then
