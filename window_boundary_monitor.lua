@@ -8,10 +8,20 @@ end
 
 local WindowBoundaryMonitor = {}
 
--- 边界高度设置 (像素)
--- 要修改边界高度，请更改下面的数值，然后重新加载 Hammerspoon 配置
--- 推荐值: 32 (适配 MiniMeters 默认高度)
-WindowBoundaryMonitor.BOUNDARY_HEIGHT = 32
+-- 统一配置表：集中所有可调常量，便于维护
+WindowBoundaryMonitor.config = {
+    -- 为 MiniMeters 预留的底部像素高度
+    BOUNDARY_HEIGHT = 32,
+    -- 定时检查间隔（秒）
+    TIMER_INTERVAL   = 2,
+    -- 全屏检测的像素容差
+    FULLSCREEN_TOLERANCE = 2,
+    -- 调整窗口时允许的最小高度
+    MIN_HEIGHT = 100,
+}
+
+-- 为向后兼容保留旧字段（别名）
+WindowBoundaryMonitor.BOUNDARY_HEIGHT = WindowBoundaryMonitor.config.BOUNDARY_HEIGHT
 
 -- 排除应用列表 - 仅排除必要的应用
 WindowBoundaryMonitor.excludedApps = {
@@ -69,7 +79,7 @@ local function isWindowFullscreen(window)
     end
     
     -- 全屏检测：检查窗口是否完全覆盖屏幕
-    local tolerance = 2
+    local tolerance = WindowBoundaryMonitor.config.FULLSCREEN_TOLERANCE
     
     -- 检查是否完全匹配 fullFrame（真全屏的几何特征）
     local exactMatch = math.abs(windowFrame.x - fullFrame.x) <= tolerance and
@@ -214,7 +224,7 @@ local function fixWindowBounds(window)
     local newHeight = maxAllowedBottom - windowFrame.y
     
     -- 最小窗口高度
-    local MIN_HEIGHT = 100
+    local MIN_HEIGHT = WindowBoundaryMonitor.config.MIN_HEIGHT
 
     -- 若窗口顶端已低于/超过底部限制，newHeight 为负，需要整体上移
     if newHeight <= 0 then
@@ -300,7 +310,7 @@ function WindowBoundaryMonitor.start()
     if checkTimer then
         checkTimer:stop()
     end
-    checkTimer = hs.timer.doEvery(2, checkAllWindows)
+    checkTimer = hs.timer.doEvery(WindowBoundaryMonitor.config.TIMER_INTERVAL, checkAllWindows)
     
     -- 检查现有窗口
     checkAllWindows()
@@ -349,6 +359,7 @@ end
 function WindowBoundaryMonitor.setBoundaryHeight(height)
     if height > 0 and height <= 200 then
         WindowBoundaryMonitor.BOUNDARY_HEIGHT = height
+        WindowBoundaryMonitor.config.BOUNDARY_HEIGHT = height
         updateScreenBoundaries()
         print(string.format("边界高度已设置为 %d 像素", height))
     else
@@ -361,12 +372,13 @@ function WindowBoundaryMonitor.showStatus()
     local status = string.format([[
 窗口边界监控状态:
 - 边界高度: %d 像素  
-- 监控模式: 定时检查 (每2秒)
+- 监控模式: 定时检查 (每%d秒)
 - 屏幕尺寸: %dx%d
 - 保护区域: 底部 %d 像素 (为 MiniMeters 预留)
 - 排除的应用数量: %d
 ]], 
         WindowBoundaryMonitor.BOUNDARY_HEIGHT,
+        WindowBoundaryMonitor.config.TIMER_INTERVAL,
         screenFrame.w, screenFrame.h,
         WindowBoundaryMonitor.BOUNDARY_HEIGHT,
         #WindowBoundaryMonitor.excludedApps
