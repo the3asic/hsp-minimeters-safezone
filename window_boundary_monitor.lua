@@ -43,6 +43,9 @@ local screenBoundaries = {}
 -- 记录窗口状态，防止全屏时的死循环
 local windowStates = {}
 
+-- 记录已经打印过全屏日志的窗口，避免重复打印
+local fullscreenLoggedWindows = {}
+
 -- 定时器用于周期检查
 local checkTimer = nil
 
@@ -105,7 +108,12 @@ local function isWindowFullscreen(window)
     local matchesDynamicFull = frameMatches(dynamicFullFrame)
     
     if matchesCachedFull or matchesDynamicFull then
-        print(string.format("跳过真全屏窗口: %s", appName))
+        -- 只在第一次检测到全屏时打印日志
+        local windowId = window:id()
+        if not fullscreenLoggedWindows[windowId] then
+            print(string.format("跳过真全屏窗口: %s", appName))
+            fullscreenLoggedWindows[windowId] = true
+        end
         return true
     end
     
@@ -144,6 +152,22 @@ local function cleanupWindowStates()
         -- 清理超过5分钟的记录
         if currentTime - state.lastCheck > 300 then
             windowStates[windowId] = nil
+        end
+    end
+    
+    -- 同时清理全屏日志记录，当窗口不再是全屏时移除记录
+    local visibleWindows = {}
+    for _, window in pairs(hs.window.visibleWindows()) do
+        if window and window:id() then
+            visibleWindows[window:id()] = window
+        end
+    end
+    
+    -- 清理已经不存在或不再是全屏的窗口日志记录
+    for windowId, _ in pairs(fullscreenLoggedWindows) do
+        local window = visibleWindows[windowId]
+        if not window or not isWindowFullscreen(window) then
+            fullscreenLoggedWindows[windowId] = nil
         end
     end
 end
@@ -195,7 +219,7 @@ local function shouldExcludeWindow(window)
     
     -- 全屏窗口排除（防止死循环）
     if isWindowFullscreen(window) then
-        print(string.format("跳过真全屏窗口: %s", appName))
+        -- 日志已在 isWindowFullscreen 中处理，避免重复
         return true
     end
     
@@ -321,6 +345,11 @@ local function checkAllWindows()
             fullscreenExitCount = fullscreenExitCount + 1
             local appName = window:application() and window:application():name() or "未知应用"
             print(string.format("检测到 %s 退出全屏，重新检查边界", appName))
+            -- 清除全屏日志记录，以便下次进入全屏时可以再次记录
+            local windowId = window:id()
+            if windowId and fullscreenLoggedWindows[windowId] then
+                fullscreenLoggedWindows[windowId] = nil
+            end
         end
         
         -- 检查边界违规并处理
