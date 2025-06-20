@@ -321,8 +321,9 @@ local function fixWindowBounds(window)
         -- 设置带平滑动画的新框架
         window:setFrame(newFrame, 0.2)
         
-        -- 显示详细的调整信息
-        local appName = window:application():name()
+        -- 显示详细的调整信息，添加空值检查
+        local app = window:application()
+        local appName = app and app:name() or "未知应用"
         local adjustment = string.format("位置:%.0f→%.0f 高度:%.0f→%.0f", 
             windowFrame.y, newFrame.y, windowFrame.h, newFrame.h)
         print(string.format("已调整 %s 窗口 (%s) 以符合边界要求", appName, adjustment))
@@ -337,26 +338,35 @@ local function checkAllWindows()
     local processedCount = 0
     local fullscreenExitCount = 0
     
-    for _, window in pairs(hs.window.visibleWindows()) do
-        -- 更新窗口状态并检测是否从全屏退出
-        local justExitedFullscreen = updateWindowState(window)
-        
-        if justExitedFullscreen then
-            fullscreenExitCount = fullscreenExitCount + 1
-            local appName = window:application() and window:application():name() or "未知应用"
-            print(string.format("检测到 %s 退出全屏，重新检查边界", appName))
-            -- 清除全屏日志记录，以便下次进入全屏时可以再次记录
-            local windowId = window:id()
-            if windowId and fullscreenLoggedWindows[windowId] then
-                fullscreenLoggedWindows[windowId] = nil
+    -- 安全地获取可见窗口列表，防止系统API调用失败
+    local visibleWindows = {}
+    pcall(function()
+        visibleWindows = hs.window.visibleWindows()
+    end)
+    
+    for _, window in pairs(visibleWindows) do
+        -- 为每个窗口添加错误处理，防止单个窗口问题影响整个循环
+        pcall(function()
+            -- 更新窗口状态并检测是否从全屏退出
+            local justExitedFullscreen = updateWindowState(window)
+            
+            if justExitedFullscreen then
+                fullscreenExitCount = fullscreenExitCount + 1
+                local appName = window:application() and window:application():name() or "未知应用"
+                print(string.format("检测到 %s 退出全屏，重新检查边界", appName))
+                -- 清除全屏日志记录，以便下次进入全屏时可以再次记录
+                local windowId = window:id()
+                if windowId and fullscreenLoggedWindows[windowId] then
+                    fullscreenLoggedWindows[windowId] = nil
+                end
             end
-        end
-        
-        -- 检查边界违规并处理
-        if isWindowViolatingBoundary(window) then
-            fixWindowBounds(window)
-            processedCount = processedCount + 1
-        end
+            
+            -- 检查边界违规并处理
+            if isWindowViolatingBoundary(window) then
+                fixWindowBounds(window)
+                processedCount = processedCount + 1
+            end
+        end)
     end
     
     if processedCount > 0 then
