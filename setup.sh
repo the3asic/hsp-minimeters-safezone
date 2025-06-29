@@ -9,7 +9,7 @@ HAMMERSPOON_DIR="$HOME/.hammerspoon"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VERSION_FILE="$HAMMERSPOON_DIR/.wbm_version"
 CURRENT_VERSION="1.0.1"
-GITHUB_REPO="the3asic/hammerspoon-minimeters"  # 修改为你的实际仓库名
+GITHUB_REPO="the3asic/hsp-minimeters-safezone"  # 修改为你的实际仓库名
 
 # 解析命令行参数
 ACTION=""

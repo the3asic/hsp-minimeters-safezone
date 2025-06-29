@@ -1,34 +1,37 @@
 -- Window Boundary Monitor  
--- 专为单显示器环境下与 MiniMeters 协同工作的窗口边界监控器
--- 优雅地为 MiniMeters 让出屏幕底部 32 像素空间
--- 若在非 Hammerspoon 环境执行，立即终止（提高鲁棒性）
+-- A window boundary monitor designed to work with MiniMeters in single-display setups
+-- Gracefully reserves a 32-pixel area at the bottom of the screen for MiniMeters
+-- Abort immediately if not running inside Hammerspoon (extra robustness)
 if type(hs) ~= "table" then
-    error("WindowBoundaryMonitor 必须在 Hammerspoon 环境中运行")
+    error("WindowBoundaryMonitor must be run inside Hammerspoon")
 end
 
 local WindowBoundaryMonitor = {}
 
 -- 统一配置表：集中所有可调常量，便于维护
+-- Centralised configuration table: tweakable constants live here
 WindowBoundaryMonitor.config = {
-    -- 为 MiniMeters 预留的底部像素高度
+    -- Pixel height reserved at the bottom of the screen for MiniMeters
     BOUNDARY_HEIGHT = 32,
-    -- 窗口检查的定时器间隔（秒）
+    -- Interval between window checks, in seconds
     WINDOW_CHECK_INTERVAL = 2,
-    -- 屏幕变更后的延迟检查间隔（秒）
+    -- Delay after a screen configuration change before re-checking, in seconds
     SCREEN_CHANGE_DELAY = 1.0,
-    -- 全屏检测的像素容差
+    -- Pixel tolerance when determining full-screen windows
     FULLSCREEN_TOLERANCE = 2,
-    -- 窗口调整时保证的最小窗口高度
+    -- Minimum window height we will guarantee when resizing
     MIN_WINDOW_HEIGHT = 100,
 }
 
 -- 为向后兼容保留旧字段（别名）
+-- Legacy alias kept for backward compatibility
 WindowBoundaryMonitor.BOUNDARY_HEIGHT = WindowBoundaryMonitor.config.BOUNDARY_HEIGHT
 
 -- 排除应用列表 - 仅排除必要的应用
+-- List of apps to exclude – only those absolutely necessary
 WindowBoundaryMonitor.excludedApps = {
-    "Hammerspoon",    -- Hammerspoon 自身
-    "MiniMeters"      -- MiniMeters 状态栏
+    "Hammerspoon",    -- The Hammerspoon app itself
+    "MiniMeters"      -- MiniMeters status bar
 }
 
 -- 将排除列表转换为哈希表以实现 O(1) 查找
