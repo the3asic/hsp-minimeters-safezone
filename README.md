@@ -116,6 +116,29 @@ The installer records the installed version in `~/.hammerspoon/.wbm_version` and
 - Dynamically adjusts window frames on multi-monitor setups.
 - Designed for stability and negligible CPU usage.
 
+## 🚀 Performance Optimizations (v0.0.2)
+
+### Memory Management Improvements
+- **Aggressive cache cleanup**: Window state cache reduced from 5 minutes to 30 seconds
+- **Cache size limits**: Prevents unlimited growth (max 50 window states, 50 fullscreen logs)
+- **Window list caching**: Reduces system API calls with 0.5s cache TTL
+- **Enhanced resource cleanup**: Complete cleanup on stop with garbage collection
+
+### Performance Monitoring
+```lua
+-- View memory usage and cache status
+wbm.showStatus()
+
+-- Manually clear all caches
+wbm.clearCaches()
+```
+
+### Performance Testing
+```bash
+# Run the performance test script (5-minute test)
+hs test_performance.lua
+```
+
 ## 📜 License
 
 MIT – see `LICENSE` for details. Contributions are welcome!

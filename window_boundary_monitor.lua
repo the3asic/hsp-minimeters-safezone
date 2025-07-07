@@ -52,6 +52,14 @@ local fullscreenLoggedWindows = {}
 -- 定时器用于周期检查
 local checkTimer = nil
 
+-- 路径监视器
+local pathWatcher = nil
+
+-- 性能优化：缓存可见窗口列表，减少系统调用
+local cachedVisibleWindows = {}
+local lastWindowCacheTime = 0
+local WINDOW_CACHE_TTL = 0.5  -- 窗口缓存有效期（秒）
+
 -- 检测窗口是否为真全屏状态（使用缓存的屏幕信息）
 local function isWindowFullscreen(window)
     if not window then return false end
@@ -148,30 +156,97 @@ local function updateWindowState(window)
     return oldState and oldState.isFullscreen and not isFullscreen
 end
 
--- 清理过期的窗口状态记录
+-- 获取缓存的可见窗口列表（减少系统调用）
+local function getVisibleWindowsCached()
+    local currentTime = os.time()
+    
+    -- 如果缓存仍有效，直接返回
+    if currentTime - lastWindowCacheTime < WINDOW_CACHE_TTL then
+        return cachedVisibleWindows
+    end
+    
+    -- 更新缓存
+    local success, windows = pcall(function()
+        return hs.window.visibleWindows()
+    end)
+    
+    if success and windows then
+        cachedVisibleWindows = windows
+        lastWindowCacheTime = currentTime
+    else
+        -- 如果获取失败，返回空表而不是旧缓存
+        cachedVisibleWindows = {}
+    end
+    
+    return cachedVisibleWindows
+end
+
+-- 清理过期的窗口状态记录（更积极的清理策略）
 local function cleanupWindowStates()
     local currentTime = os.time()
+    local activeWindowIds = {}
+    
+    -- 获取当前所有活跃窗口的ID集合
+    for _, window in pairs(getVisibleWindowsCached()) do
+        if window and window:id() then
+            local windowId = getWindowId(window)
+            if windowId then
+                activeWindowIds[windowId] = true
+            end
+        end
+    end
+    
+    -- 清理不再活跃的窗口状态（更积极）
     for windowId, state in pairs(windowStates) do
-        -- 清理超过5分钟的记录
-        if currentTime - state.lastCheck > 300 then
+        -- 如果窗口不再活跃，或超过30秒未更新，则清理
+        if not activeWindowIds[windowId] or (currentTime - state.lastCheck > 30) then
             windowStates[windowId] = nil
         end
     end
     
-    -- 同时清理全屏日志记录，当窗口不再是全屏时移除记录
-    local visibleWindows = {}
-    for _, window in pairs(hs.window.visibleWindows()) do
-        if window and window:id() then
-            visibleWindows[window:id()] = window
+    -- 限制缓存大小，防止内存泄漏
+    local count = 0
+    for _ in pairs(windowStates) do count = count + 1 end
+    if count > 100 then
+        -- 如果缓存过大，保留最近的50个记录
+        local sortedStates = {}
+        for id, state in pairs(windowStates) do
+            table.insert(sortedStates, {id = id, lastCheck = state.lastCheck})
+        end
+        table.sort(sortedStates, function(a, b) return a.lastCheck > b.lastCheck end)
+        
+        windowStates = {}
+        for i = 1, 50 do
+            if sortedStates[i] then
+                windowStates[sortedStates[i].id] = {
+                    isFullscreen = false,
+                    lastCheck = sortedStates[i].lastCheck
+                }
+            end
         end
     end
     
-    -- 清理已经不存在或不再是全屏的窗口日志记录
+    -- 同时清理全屏日志记录
+    local visibleWindowIds = {}
+    for _, window in pairs(getVisibleWindowsCached()) do
+        if window and window:id() then
+            visibleWindowIds[window:id()] = true
+        end
+    end
+    
+    -- 清理已经不存在的窗口日志记录
     for windowId, _ in pairs(fullscreenLoggedWindows) do
-        local window = visibleWindows[windowId]
-        if not window or not isWindowFullscreen(window) then
+        if not visibleWindowIds[windowId] then
             fullscreenLoggedWindows[windowId] = nil
         end
+    end
+    
+    -- 限制全屏日志缓存大小
+    local logCount = 0
+    for _ in pairs(fullscreenLoggedWindows) do logCount = logCount + 1 end
+    if logCount > 50 then
+        -- 清空过大的缓存
+        fullscreenLoggedWindows = {}
     end
 end
 
@@ -341,11 +416,8 @@ local function checkAllWindows()
     local processedCount = 0
     local fullscreenExitCount = 0
     
-    -- 安全地获取可见窗口列表，防止系统API调用失败
-    local visibleWindows = {}
-    pcall(function()
-        visibleWindows = hs.window.visibleWindows()
-    end)
+    -- 使用缓存的窗口列表
+    local visibleWindows = getVisibleWindowsCached()
     
     for _, window in pairs(visibleWindows) do
         -- 为每个窗口添加错误处理，防止单个窗口问题影响整个循环
@@ -403,11 +475,23 @@ function WindowBoundaryMonitor.start()
     -- 开始监控
     screenWatcher:start()
     
-    -- 启动定时检查
+    -- 启动定时检查（确保清理旧定时器）
     if checkTimer then
         checkTimer:stop()
+        checkTimer = nil
     end
-    checkTimer = hs.timer.doEvery(WindowBoundaryMonitor.config.WINDOW_CHECK_INTERVAL, checkAllWindows)
+    checkTimer = hs.timer.doEvery(WindowBoundaryMonitor.config.WINDOW_CHECK_INTERVAL, function()
+        -- 使用 pcall 包装，防止单次错误中断定时器
+        local success, err = pcall(checkAllWindows)
+        if not success then
+            print("窗口检查出错: " .. tostring(err))
+        end
+        
+        -- 定期执行垃圾回收（每10次检查执行一次）
+        if math.random(1, 10) == 1 then
+            collectgarbage("collect")
+        end
+    end)
     
     -- 检查现有窗口
     checkAllWindows()
@@ -416,18 +500,31 @@ function WindowBoundaryMonitor.start()
     hs.alert.show("窗口边界监控已启动", 2)
 end
 
--- 清理函数
+-- 清理函数（增强的资源清理）
 function WindowBoundaryMonitor.stop()
     if screenWatcher then 
-        -- 仅停止，不置空，避免重启时空引用
-        screenWatcher:stop() 
+        screenWatcher:stop()
+        screenWatcher = nil
     end
     if checkTimer then
         checkTimer:stop()
         checkTimer = nil
     end
+    if pathWatcher then
+        pathWatcher:stop()
+        pathWatcher = nil
+    end
     
-    print("窗口边界监控已停止")
+    -- 清理所有缓存
+    windowStates = {}
+    fullscreenLoggedWindows = {}
+    cachedVisibleWindows = {}
+    screenBoundaries = {}
+    
+    -- 强制垃圾回收
+    collectgarbage("collect")
+    
+    print("窗口边界监控已停止（已清理所有资源）")
     hs.alert.show("窗口边界监控已停止", 2)
 end
 
@@ -465,6 +562,22 @@ end
 
 function WindowBoundaryMonitor.showStatus()
     local screenFrame = hs.screen.primaryScreen():frame()
+    
+    -- 计算缓存大小
+    local windowStateCount = 0
+    for _ in pairs(windowStates) do windowStateCount = windowStateCount + 1 end
+    
+    local fullscreenLogCount = 0
+    for _ in pairs(fullscreenLoggedWindows) do fullscreenLogCount = fullscreenLogCount + 1 end
+    
+    local screenCount = 0
+    for _ in pairs(screenBoundaries) do screenCount = screenCount + 1 end
+    
+    -- 获取内存使用情况
+    local memoryBefore = collectgarbage("count")
+    collectgarbage("collect")
+    local memoryAfter = collectgarbage("count")
+    
     local status = string.format([[
 窗口边界监控状态:
 - 边界高度: %d 像素  
@@ -472,12 +585,24 @@ function WindowBoundaryMonitor.showStatus()
 - 屏幕尺寸: %dx%d
 - 保护区域: 底部 %d 像素 (为 MiniMeters 预留)
 - 排除的应用数量: %d
+
+缓存状态:
+- 窗口状态缓存: %d 条记录
+- 全屏日志缓存: %d 条记录
+- 屏幕边界缓存: %d 个屏幕
+- 内存使用 (回收前): %.2f KB
+- 内存使用 (回收后): %.2f KB
 ]], 
         WindowBoundaryMonitor.config.BOUNDARY_HEIGHT,
         WindowBoundaryMonitor.config.WINDOW_CHECK_INTERVAL,
         screenFrame.w, screenFrame.h,
         WindowBoundaryMonitor.config.BOUNDARY_HEIGHT,
-        #WindowBoundaryMonitor.excludedApps
+        #WindowBoundaryMonitor.excludedApps,
+        windowStateCount,
+        fullscreenLogCount,
+        screenCount,
+        memoryBefore,
+        memoryAfter
     )
     print(status)
     return status
@@ -493,9 +618,25 @@ local function cleanup()
     WindowBoundaryMonitor.stop()
 end
 
--- 注册清理处理器
-if hs.configdir then
-    hs.pathwatcher.new(hs.configdir, cleanup):start()
+-- 注册清理处理器（避免重复创建）
+if hs.configdir and not pathWatcher then
+    pathWatcher = hs.pathwatcher.new(hs.configdir, cleanup)
+    pathWatcher:start()
+end
+
+-- 清理所有缓存（手动调用）
+function WindowBoundaryMonitor.clearCaches()
+    -- 清空所有缓存
+    windowStates = {}
+    fullscreenLoggedWindows = {}
+    cachedVisibleWindows = {}
+    lastWindowCacheTime = 0
+    
+    -- 强制垃圾回收
+    collectgarbage("collect")
+    
+    print("已清理所有缓存并执行垃圾回收")
+    hs.alert.show("缓存已清理", 1)
 end
 
 -- 导出模块以供手动控制
