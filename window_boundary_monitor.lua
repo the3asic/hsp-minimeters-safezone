@@ -49,25 +49,54 @@ local windowStates = {}
 -- 记录已经打印过全屏日志的窗口，避免重复打印
 local fullscreenLoggedWindows = {}
 
+-- 窗口调整冷却机制：防止死循环调整
+local windowAdjustmentCooldown = {}
+local ADJUSTMENT_COOLDOWN_SECONDS = 15  -- 冷却期15秒
+
+-- 顽固窗口黑名单：记录无法调整的窗口
+local stubbornWindows = {}
+local STUBBORN_WINDOW_TIMEOUT = 300  -- 黑名单超时5分钟
+
 -- 定时器用于周期检查
 local checkTimer = nil
 
 -- 路径监视器
 local pathWatcher = nil
 
+-- 屏幕变更防抖定时器
+local screenChangeDebounceTimer = nil
+
 -- 性能优化：缓存可见窗口列表，减少系统调用
 local cachedVisibleWindows = {}
 local lastWindowCacheTime = 0
 local WINDOW_CACHE_TTL = 0.5  -- 窗口缓存有效期（秒）
 
+-- 安全获取窗口应用信息，避免NSRunningApplication错误
+local function safeGetWindowApp(window)
+    if not window then return nil end
+    
+    local success, app = pcall(function()
+        return window:application()
+    end)
+    
+    if success and app then
+        local success2, name = pcall(function()
+            return app:name()
+        end)
+        if success2 and name then
+            return app, name
+        end
+    end
+    
+    return nil, nil
+end
+
 -- 检测窗口是否为真全屏状态（使用缓存的屏幕信息）
 local function isWindowFullscreen(window)
     if not window then return false end
     
-    local app = window:application()
-    if not app then return false end
-    
-    local appName = app:name()
+    local app, appName = safeGetWindowApp(window)
+    if not app or not appName then return false end
     local windowFrame = window:frame()
     local screen = window:screen()
     if not screen then return false end
@@ -131,12 +160,21 @@ local function isWindowFullscreen(window)
     return false
 end
 
--- 获取窗口唯一标识
+-- 获取窗口唯一标识（使用安全的应用获取方法）
 local function getWindowId(window)
     if not window then return nil end
-    local app = window:application()
-    if not app then return nil end
-    return app:name() .. ":" .. (window:title() or "untitled")
+    local app, appName = safeGetWindowApp(window)
+    if not app or not appName then return nil end
+    
+    local title = ""
+    local success, windowTitle = pcall(function()
+        return window:title() or ""
+    end)
+    if success then
+        title = windowTitle
+    end
+    
+    return appName .. ":" .. title
 end
 
 -- 更新窗口状态并检测变化
@@ -156,7 +194,7 @@ local function updateWindowState(window)
     return oldState and oldState.isFullscreen and not isFullscreen
 end
 
--- 获取缓存的可见窗口列表（减少系统调用）
+-- 获取缓存的可见窗口列表（减少系统调用并增强错误处理）
 local function getVisibleWindowsCached()
     local currentTime = os.time()
     
@@ -165,13 +203,23 @@ local function getVisibleWindowsCached()
         return cachedVisibleWindows
     end
     
-    -- 更新缓存
+    -- 更新缓存，增强错误处理
     local success, windows = pcall(function()
         return hs.window.visibleWindows()
     end)
     
     if success and windows then
-        cachedVisibleWindows = windows
+        -- 过滤掉无效窗口，减少后续错误
+        local validWindows = {}
+        for _, window in pairs(windows) do
+            local success, isValid = pcall(function()
+                return window and window:id() and window:isVisible()
+            end)
+            if success and isValid then
+                table.insert(validWindows, window)
+            end
+        end
+        cachedVisibleWindows = validWindows
         lastWindowCacheTime = currentTime
     else
         -- 如果获取失败，返回空表而不是旧缓存
@@ -201,6 +249,20 @@ local function cleanupWindowStates()
         -- 如果窗口不再活跃，或超过30秒未更新，则清理
         if not activeWindowIds[windowId] or (currentTime - state.lastCheck > 30) then
             windowStates[windowId] = nil
+        end
+    end
+    
+    -- 清理过期的冷却记录
+    for windowId, lastAdjustment in pairs(windowAdjustmentCooldown) do
+        if not activeWindowIds[windowId] or (currentTime - lastAdjustment > ADJUSTMENT_COOLDOWN_SECONDS * 2) then
+            windowAdjustmentCooldown[windowId] = nil
+        end
+    end
+    
+    -- 清理过期的顽固窗口记录
+    for windowId, blacklistTime in pairs(stubbornWindows) do
+        if not activeWindowIds[windowId] or (currentTime - blacklistTime > STUBBORN_WINDOW_TIMEOUT) then
+            stubbornWindows[windowId] = nil
         end
     end
     
@@ -274,15 +336,25 @@ end
 
 -- 智能排除系统 - 检查是否应该排除某个窗口
 local function shouldExcludeWindow(window)
-    if not window or not window:isVisible() or not window:isStandard() then
+    if not window then return true end
+    
+    local success, isValid = pcall(function()
+        return window:isVisible() and window:isStandard()
+    end)
+    if not success or not isValid then
         return true
     end
     
-    local app = window:application()
-    if not app then return true end
+    local app, appName = safeGetWindowApp(window)
+    if not app or not appName then return true end
     
-    local appName = app:name()
-    local windowTitle = window:title() or ""
+    local windowTitle = ""
+    local titleSuccess, title = pcall(function()
+        return window:title() or ""
+    end)
+    if titleSuccess then
+        windowTitle = title
+    end
     
     -- 基于应用名称的排除
     if excludedAppsSet[appName] then return true end
@@ -309,13 +381,33 @@ local function shouldExcludeWindow(window)
     return false
 end
 
--- 检查窗口是否违反底部边界
+-- 检查窗口是否违反底部边界（增加容差机制）
 local function isWindowViolatingBoundary(window)
     if shouldExcludeWindow(window) then
         return false
     end
     
-    local windowFrame = window:frame()
+    local windowId = getWindowId(window)
+    if not windowId then return false end
+    
+    -- 检查是否在冷却期内
+    local currentTime = os.time()
+    if windowAdjustmentCooldown[windowId] and 
+       (currentTime - windowAdjustmentCooldown[windowId]) < ADJUSTMENT_COOLDOWN_SECONDS then
+        return false  -- 冷却期内不处理
+    end
+    
+    -- 检查是否为顽固窗口
+    if stubbornWindows[windowId] and 
+       (currentTime - stubbornWindows[windowId]) < STUBBORN_WINDOW_TIMEOUT then
+        return false  -- 黑名单内不处理
+    end
+    
+    local success, windowFrame = pcall(function()
+        return window:frame()
+    end)
+    if not success or not windowFrame then return false end
+    
     local screen = window:screen()
     if not screen then return false end
     
@@ -323,14 +415,22 @@ local function isWindowViolatingBoundary(window)
     local bounds = screenBoundaries[screenId]
     if not bounds then return false end
     
-    -- 检查窗口底部边缘是否超出边界
+    -- 检查窗口底部边缘是否超出边界（添加3像素容差）
     local windowBottom = windowFrame.y + windowFrame.h
-    return windowBottom > bounds.bottomLimit
+    local tolerance = 3  -- 3像素容差，避免微小偏差触发调整
+    return windowBottom > (bounds.bottomLimit + tolerance)
 end
 
 -- 改进的窗口边界调整算法：智能处理顶部和底部边界违规
 local function fixWindowBounds(window)
-    local windowFrame = window:frame()
+    local windowId = getWindowId(window)
+    if not windowId then return end
+    
+    local success, windowFrame = pcall(function()
+        return window:frame()
+    end)
+    if not success or not windowFrame then return end
+    
     local screen = window:screen()
     if not screen then return end
     
@@ -396,15 +496,45 @@ local function fixWindowBounds(window)
     
     -- 应用调整
     if needsAdjustment then
-        -- 设置带平滑动画的新框架
-        window:setFrame(newFrame, 0.2)
+        local currentTime = os.time()
         
-        -- 显示详细的调整信息，添加空值检查
-        local app = window:application()
-        local appName = app and app:name() or "未知应用"
-        local adjustment = string.format("位置:%.0f→%.0f 高度:%.0f→%.0f", 
-            windowFrame.y, newFrame.y, windowFrame.h, newFrame.h)
-        print(string.format("已调整 %s 窗口 (%s) 以符合边界要求", appName, adjustment))
+        -- 记录调整时间（冷却机制）
+        windowAdjustmentCooldown[windowId] = currentTime
+        
+        -- 设置带平滑动画的新框架
+        local setSuccess = pcall(function()
+            window:setFrame(newFrame, 0.2)
+        end)
+        
+        if setSuccess then
+            -- 显示详细的调整信息，使用安全的应用获取方法
+            local app, appName = safeGetWindowApp(window)
+            local displayName = appName or "未知应用"
+            local adjustment = string.format("位置:%.0f→%.0f 高度:%.0f→%.0f", 
+                windowFrame.y, newFrame.y, windowFrame.h, newFrame.h)
+            print(string.format("已调整 %s 窗口 (%s) 以符合边界要求", displayName, adjustment))
+            
+            -- 短暂延迟后验证调整是否生效
+            hs.timer.doAfter(0.5, function()
+                local verifySuccess, newActualFrame = pcall(function()
+                    return window:frame()
+                end)
+                
+                if verifySuccess and newActualFrame then
+                    local actualBottom = newActualFrame.y + newActualFrame.h
+                    local tolerance = 5  -- 验证时使用稍大的容差
+                    
+                    -- 如果调整后仍然违规，标记为顽固窗口
+                    if actualBottom > (bounds.bottomLimit + tolerance) then
+                        stubbornWindows[windowId] = currentTime
+                        print(string.format("警告: %s 窗口调整无效，已加入临时黑名单", displayName))
+                    end
+                end
+            end)
+        else
+            -- 如果设置框架失败，标记为顽固窗口
+            stubbornWindows[windowId] = currentTime
+        end
     end
 end
 
@@ -427,8 +557,9 @@ local function checkAllWindows()
             
             if justExitedFullscreen then
                 fullscreenExitCount = fullscreenExitCount + 1
-                local appName = window:application() and window:application():name() or "未知应用"
-                print(string.format("检测到 %s 退出全屏，重新检查边界", appName))
+                local app, appName = safeGetWindowApp(window)
+                local displayName = appName or "未知应用"
+                print(string.format("检测到 %s 退出全屏，重新检查边界", displayName))
                 -- 清除全屏日志记录，以便下次进入全屏时可以再次记录
                 local windowId = window:id()
                 if windowId and fullscreenLoggedWindows[windowId] then
@@ -453,14 +584,33 @@ local function checkAllWindows()
     end
 end
 
--- 屏幕监视器用于显示配置变更
+-- 屏幕监视器用于显示配置变更（增加防抖机制）
 local screenWatcher = hs.screen.watcher.new(function()
-    print("检测到显示器配置变更，正在更新边界...")
-    updateScreenBoundaries()
+    -- 取消之前的防抖定时器
+    if screenChangeDebounceTimer then
+        screenChangeDebounceTimer:stop()
+        screenChangeDebounceTimer = nil
+    end
     
-    -- 屏幕变更后重新检查所有可见窗口
-    hs.timer.doAfter(WindowBoundaryMonitor.config.SCREEN_CHANGE_DELAY, function()
-        checkAllWindows()
+    -- 设置新的防抖定时器，500ms内的多次变更只处理一次
+    screenChangeDebounceTimer = hs.timer.doAfter(0.5, function()
+        -- 只在必要时打印日志（减少噪音）
+        local currentScreenCount = #hs.screen.allScreens()
+        local oldScreenCount = 0
+        for _ in pairs(screenBoundaries) do oldScreenCount = oldScreenCount + 1 end
+        
+        if currentScreenCount ~= oldScreenCount then
+            print("检测到显示器配置变更，正在更新边界...")
+        end
+        
+        updateScreenBoundaries()
+        
+        -- 屏幕变更后重新检查所有可见窗口
+        hs.timer.doAfter(WindowBoundaryMonitor.config.SCREEN_CHANGE_DELAY, function()
+            checkAllWindows()
+        end)
+        
+        screenChangeDebounceTimer = nil
     end)
 end)
 
@@ -515,11 +665,19 @@ function WindowBoundaryMonitor.stop()
         pathWatcher = nil
     end
     
-    -- 清理所有缓存
+    -- 清理所有缓存和定时器
     windowStates = {}
     fullscreenLoggedWindows = {}
     cachedVisibleWindows = {}
     screenBoundaries = {}
+    windowAdjustmentCooldown = {}
+    stubbornWindows = {}
+    
+    -- 清理防抖定时器
+    if screenChangeDebounceTimer then
+        screenChangeDebounceTimer:stop()
+        screenChangeDebounceTimer = nil
+    end
     
     -- 强制垃圾回收
     collectgarbage("collect")
@@ -570,6 +728,12 @@ function WindowBoundaryMonitor.showStatus()
     local fullscreenLogCount = 0
     for _ in pairs(fullscreenLoggedWindows) do fullscreenLogCount = fullscreenLogCount + 1 end
     
+    local cooldownCount = 0
+    for _ in pairs(windowAdjustmentCooldown) do cooldownCount = cooldownCount + 1 end
+    
+    local stubbornCount = 0
+    for _ in pairs(stubbornWindows) do stubbornCount = stubbornCount + 1 end
+    
     local screenCount = 0
     for _ in pairs(screenBoundaries) do screenCount = screenCount + 1 end
     
@@ -589,6 +753,8 @@ function WindowBoundaryMonitor.showStatus()
 缓存状态:
 - 窗口状态缓存: %d 条记录
 - 全屏日志缓存: %d 条记录
+- 调整冷却缓存: %d 条记录
+- 顽固窗口黑名单: %d 条记录
 - 屏幕边界缓存: %d 个屏幕
 - 内存使用 (回收前): %.2f KB
 - 内存使用 (回收后): %.2f KB
@@ -600,6 +766,8 @@ function WindowBoundaryMonitor.showStatus()
         #WindowBoundaryMonitor.excludedApps,
         windowStateCount,
         fullscreenLogCount,
+        cooldownCount,
+        stubbornCount,
         screenCount,
         memoryBefore,
         memoryAfter
@@ -630,6 +798,8 @@ function WindowBoundaryMonitor.clearCaches()
     windowStates = {}
     fullscreenLoggedWindows = {}
     cachedVisibleWindows = {}
+    windowAdjustmentCooldown = {}
+    stubbornWindows = {}
     lastWindowCacheTime = 0
     
     -- 强制垃圾回收
