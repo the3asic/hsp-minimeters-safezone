@@ -49,13 +49,14 @@ local windowStates = {}
 -- 记录已经打印过全屏日志的窗口，避免重复打印
 local fullscreenLoggedWindows = {}
 
--- 窗口调整冷却机制：防止死循环调整
-local windowAdjustmentCooldown = {}
-local ADJUSTMENT_COOLDOWN_SECONDS = 15  -- 冷却期15秒
+-- 【根据用户反馈，"调整冷却期"功能已移除】
 
 -- 顽固窗口黑名单：记录无法调整的窗口
 local stubbornWindows = {}
-local STUBBORN_WINDOW_TIMEOUT = 300  -- 黑名单超时5分钟
+local STUBBORN_WINDOW_TIMEOUT = 300  -- 黑名单超时5分钟 (基础超时)
+local stubbornWindowCounters = {} -- 新增：顽固窗口失败计数器
+local MAX_STUBBORN_ATTEMPTS = 20    -- 新增：连续失败20次后加入长期黑名单
+local LONG_STUBBORN_TIMEOUT = 3600 -- 新增：长期黑名单超时1小时
 
 -- 定时器用于周期检查
 local checkTimer = nil
@@ -73,21 +74,21 @@ local WINDOW_CACHE_TTL = 0.5  -- 窗口缓存有效期（秒）
 
 -- 安全获取窗口应用信息，避免NSRunningApplication错误
 local function safeGetWindowApp(window)
-    if not window then return nil end
-    
-    local success, app = pcall(function()
-        return window:application()
-    end)
-    
-    if success and app then
-        local success2, name = pcall(function()
-            return app:name()
-        end)
-        if success2 and name then
-            return app, name
+    -- 增加更严格的早期退出检查
+    if not window or not window:id() then return nil, nil end
+
+    local app, name
+    local success = pcall(function()
+        app = window:application()
+        if app then
+            name = app:name()
         end
+    end)
+
+    if success and app and name then
+        return app, name
     end
-    
+
     return nil, nil
 end
 
@@ -252,17 +253,11 @@ local function cleanupWindowStates()
         end
     end
     
-    -- 清理过期的冷却记录
-    for windowId, lastAdjustment in pairs(windowAdjustmentCooldown) do
-        if not activeWindowIds[windowId] or (currentTime - lastAdjustment > ADJUSTMENT_COOLDOWN_SECONDS * 2) then
-            windowAdjustmentCooldown[windowId] = nil
-        end
-    end
-    
     -- 清理过期的顽固窗口记录
     for windowId, blacklistTime in pairs(stubbornWindows) do
         if not activeWindowIds[windowId] or (currentTime - blacklistTime > STUBBORN_WINDOW_TIMEOUT) then
             stubbornWindows[windowId] = nil
+            stubbornWindowCounters[windowId] = nil -- 同时清理计数器
         end
     end
     
@@ -390,17 +385,17 @@ local function isWindowViolatingBoundary(window)
     local windowId = getWindowId(window)
     if not windowId then return false end
     
-    -- 检查是否在冷却期内
-    local currentTime = os.time()
-    if windowAdjustmentCooldown[windowId] and 
-       (currentTime - windowAdjustmentCooldown[windowId]) < ADJUSTMENT_COOLDOWN_SECONDS then
-        return false  -- 冷却期内不处理
-    end
-    
     -- 检查是否为顽固窗口
-    if stubbornWindows[windowId] and 
-       (currentTime - stubbornWindows[windowId]) < STUBBORN_WINDOW_TIMEOUT then
-        return false  -- 黑名单内不处理
+    local currentTime = os.time()
+    if stubbornWindows[windowId] then
+        local timeout = STUBBORN_WINDOW_TIMEOUT
+        -- 如果失败次数达到上限，使用长期超时
+        if stubbornWindowCounters[windowId] and stubbornWindowCounters[windowId] >= MAX_STUBBORN_ATTEMPTS then
+            timeout = LONG_STUBBORN_TIMEOUT
+        end
+        if (currentTime - stubbornWindows[windowId]) < timeout then
+            return false -- 黑名单内不处理
+        end
     end
     
     local success, windowFrame = pcall(function()
@@ -498,9 +493,6 @@ local function fixWindowBounds(window)
     if needsAdjustment then
         local currentTime = os.time()
         
-        -- 记录调整时间（冷却机制）
-        windowAdjustmentCooldown[windowId] = currentTime
-        
         -- 设置带平滑动画的新框架
         local setSuccess = pcall(function()
             window:setFrame(newFrame, 0.2)
@@ -526,8 +518,19 @@ local function fixWindowBounds(window)
                     
                     -- 如果调整后仍然违规，标记为顽固窗口
                     if actualBottom > (bounds.bottomLimit + tolerance) then
+                        -- 增加失败计数
+                        stubbornWindowCounters[windowId] = (stubbornWindowCounters[windowId] or 0) + 1
                         stubbornWindows[windowId] = currentTime
-                        print(string.format("警告: %s 窗口调整无效，已加入临时黑名单", displayName))
+                        
+                        local attemptCount = stubbornWindowCounters[windowId]
+                        if attemptCount >= MAX_STUBBORN_ATTEMPTS then
+                            print(string.format("警告: %s 窗口调整连续 %d 次无效，已加入长期黑名单 (1小时)", displayName, attemptCount))
+                        else
+                            print(string.format("警告: %s 窗口调整无效，已加入临时黑名单 (第 %d/%d 次尝试)", displayName, attemptCount, MAX_STUBBORN_ATTEMPTS))
+                        end
+                    else
+                        -- 调整成功，重置计数器
+                        stubbornWindowCounters[windowId] = nil
                     end
                 end
             end)
@@ -604,6 +607,11 @@ local screenWatcher = hs.screen.watcher.new(function()
         end
         
         updateScreenBoundaries()
+
+        -- 清理顽固窗口黑名单，因为屏幕变化后布局可能已改变
+        stubbornWindows = {}
+        stubbornWindowCounters = {}
+        print("已清理顽固窗口黑名单以应对显示器变更")
         
         -- 屏幕变更后重新检查所有可见窗口
         hs.timer.doAfter(WindowBoundaryMonitor.config.SCREEN_CHANGE_DELAY, function()
@@ -670,7 +678,6 @@ function WindowBoundaryMonitor.stop()
     fullscreenLoggedWindows = {}
     cachedVisibleWindows = {}
     screenBoundaries = {}
-    windowAdjustmentCooldown = {}
     stubbornWindows = {}
     
     -- 清理防抖定时器
@@ -728,9 +735,6 @@ function WindowBoundaryMonitor.showStatus()
     local fullscreenLogCount = 0
     for _ in pairs(fullscreenLoggedWindows) do fullscreenLogCount = fullscreenLogCount + 1 end
     
-    local cooldownCount = 0
-    for _ in pairs(windowAdjustmentCooldown) do cooldownCount = cooldownCount + 1 end
-    
     local stubbornCount = 0
     for _ in pairs(stubbornWindows) do stubbornCount = stubbornCount + 1 end
     
@@ -753,7 +757,7 @@ function WindowBoundaryMonitor.showStatus()
 缓存状态:
 - 窗口状态缓存: %d 条记录
 - 全屏日志缓存: %d 条记录
-- 调整冷却缓存: %d 条记录
+- 调整冷却缓存: 0 条记录 (已移除)
 - 顽固窗口黑名单: %d 条记录
 - 屏幕边界缓存: %d 个屏幕
 - 内存使用 (回收前): %.2f KB
@@ -766,7 +770,7 @@ function WindowBoundaryMonitor.showStatus()
         #WindowBoundaryMonitor.excludedApps,
         windowStateCount,
         fullscreenLogCount,
-        cooldownCount,
+        0, -- cooldownCount is removed
         stubbornCount,
         screenCount,
         memoryBefore,
@@ -798,7 +802,6 @@ function WindowBoundaryMonitor.clearCaches()
     windowStates = {}
     fullscreenLoggedWindows = {}
     cachedVisibleWindows = {}
-    windowAdjustmentCooldown = {}
     stubbornWindows = {}
     lastWindowCacheTime = 0
     
