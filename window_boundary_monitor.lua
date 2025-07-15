@@ -61,9 +61,6 @@ local LONG_STUBBORN_TIMEOUT = 3600 -- 新增：长期黑名单超时1小时
 -- 定时器用于周期检查
 local checkTimer = nil
 
--- 路径监视器
-local pathWatcher = nil
-
 -- 屏幕变更防抖定时器
 local screenChangeDebounceTimer = nil
 
@@ -655,7 +652,7 @@ function WindowBoundaryMonitor.start()
     checkAllWindows()
     
     print("窗口边界监控已启动（定时检查模式）")
-    hs.alert.show("窗口边界监控已启动", 2)
+    -- hs.alert.show("窗口边界监控已启动", 2) -- 根据用户反馈移除，实现无感重载
 end
 
 -- 清理函数（增强的资源清理）
@@ -667,10 +664,6 @@ function WindowBoundaryMonitor.stop()
     if checkTimer then
         checkTimer:stop()
         checkTimer = nil
-    end
-    if pathWatcher then
-        pathWatcher:stop()
-        pathWatcher = nil
     end
     
     -- 清理所有缓存和定时器
@@ -690,7 +683,7 @@ function WindowBoundaryMonitor.stop()
     collectgarbage("collect")
     
     print("窗口边界监控已停止（已清理所有资源）")
-    hs.alert.show("窗口边界监控已停止", 2)
+    -- hs.alert.show("窗口边界监控已停止", 2) -- 不再需要，因为stop不再被自动调用
 end
 
 -- 配置函数
@@ -785,16 +778,7 @@ function WindowBoundaryMonitor.checkAllWindows()
     checkAllWindows()
 end
 
--- 清理函数，在配置重载时调用
-local function cleanup()
-    WindowBoundaryMonitor.stop()
-end
-
--- 注册清理处理器（避免重复创建）
-if hs.configdir and not pathWatcher then
-    pathWatcher = hs.pathwatcher.new(hs.configdir, cleanup)
-    pathWatcher:start()
-end
+-- 【根据用户反馈，清理逻辑已移除，完全依赖Hammerspoon重载机制】
 
 -- 清理所有缓存（手动调用）
 function WindowBoundaryMonitor.clearCaches()
